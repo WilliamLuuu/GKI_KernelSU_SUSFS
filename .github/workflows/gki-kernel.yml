@@ -42,7 +42,7 @@ jobs:
       CCACHE_COMPILERCHECK: "%compiler% -dumpmachine; %compiler% -dumpversion"
       CCACHE_NOHASHDIR: "true"
       CCACHE_HARDLINK: "true"
-      ZRAM: "false"
+      ZRAM: "true"
 
     steps:
       - name: Maximize build space
@@ -181,21 +181,6 @@ jobs:
           $REPO --version
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
 
-      #- name: Copy file
-      #  run: |
-      #    cp -r $CONFIG source-clean-$CONFIG
-
-      #- name: Upload artifact
-      #  if: ${{ inputs.make_release == false }}
-      #  uses: actions/upload-artifact@v4
-      #  with:
-      #    name: source-clean-${{ env.CONFIG }}
-      #    path: source-clean-${{ env.CONFIG }}
-
-      #- name: Remove file
-      #  run: |
-      #    rm -rf source-clean-$CONFIG
-
       - name: Determine the branch for KernelSU
         run: |
           if [[ "${{ inputs.kernelsu_branch }}" == "Stable" ]]; then
@@ -229,11 +214,6 @@ jobs:
           cp ../susfs4ksu/kernel_patches/50_add_susfs_in_gki-${{ inputs.android_version }}-${{ inputs.kernel_version }}.patch ./common/
           cp ../susfs4ksu/kernel_patches/fs/* ./common/fs/
           cp ../susfs4ksu/kernel_patches/include/linux/* ./common/include/linux/
-          
-          #lz4k
-          #cp -r ../SukiSU_patch/other/lz4k/include/linux/* ./common/include/linux
-          #cp -r ../SukiSU_patch/other/lz4k/lib/* ./common/lib
-          #cp -r ../SukiSU_patch/other/lz4k/crypto/* ./common/crypto
 
           if [ "${{ inputs.kernelsu_variant }}" == "SukiSU" ]; then
             echo "Applying SUSFS patches for SukiSU..."
@@ -277,7 +257,6 @@ jobs:
             cp -r ../../SukiSU_patch/other/zram/lz4k/include/linux/* ./include/linux/
             cp -r ../../SukiSU_patch/other/zram/lz4k/lib/* ./lib/
             cp -r ../../SukiSU_patch/other/zram/lz4k/crypto/* ./crypto/
-            cp -r ../../SukiSU_patch/other/zram/zstdn ./lib/
             cp -r ../../SukiSU_patch/other/zram/lz4k_oplus ./lib/
           
             cp ../../SukiSU_patch/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4kd.patch ./
@@ -285,13 +264,13 @@ jobs:
             patch -p1 -F 3 < lz4kd.patch || true
             echo '完成LZ4KD补丁'
 
-            cp ../../SukiSU_patch/other/zram/zram_patch/${{ inputs.kernel_version }}/zstdn.patch ./
-            echo "正在打zstdn补丁"
-            patch -p1 -F 3 < zstdn.patch || true
-            echo '完成ZSTDN补丁'
+            cp ../../SukiSU_patch/other/zram/zram_patch/${{ inputs.kernel_version }}/lz4k_oplus.patch ./
+            echo "正在打lz4k_oplus补丁"
+            patch -p1 -F 3 < lz4k_oplus.patch || true
+            echo '完成lz4k_oplus补丁'
           fi
 
-      - name: LZ4KD&ZSTDN配置
+      - name: LZ4KD&Lz4k_oplus配置
         run: |
           if [[ "${{ env.ZRAM }}" == "true" ]]; then
             echo "写入LZ4KD&ZSTDN config依赖"
@@ -327,10 +306,10 @@ jobs:
               sed -i 's/"drivers\/block\/zram\/zram\.ko",//g; s/"mm\/zsmalloc\.ko",//g' "$CONFIG/common/modules.bzl"
               echo "CONFIG_MODULE_SIG_FORCE=n" >> "$CONFIG_FILE"
               echo 'Android14_Bazel:已修复zram&zsmalloc'
-            elif [ "${{ inputs.kernel_version }}" = "5.15" ]; then
+            elif [ "${{ inputs.kernel_version }}" = "5.10" ] || [ "${{ inputs.kernel_version }}" = "5.15" ]; then
               rm "$CONFIG/common/android/gki_aarch64_modules"
               touch "$CONFIG/common/android/gki_aarch64_modules"
-              echo '5.15:已修复zram&zsmalloc'
+              echo '5.10&5.15:已修复zram&zsmalloc'
             fi
 
              if grep -q "CONFIG_ZSMALLOC=y" "$CONFIG_FILE" && grep -q "CONFIG_ZRAM=y" "$CONFIG_FILE"; then
@@ -338,8 +317,8 @@ jobs:
               echo "CONFIG_CRYPTO_LZ4K=y" >> "$CONFIG_FILE"
               echo "CONFIG_CRYPTO_LZ4KD=y" >> "$CONFIG_FILE"
               echo "CONFIG_CRYPTO_842=y" >> "$CONFIG_FILE"
-              echo "CONFIG_CRYPTO_ZSTDN=m" >> "$CONFIG_FILE"
               echo "CONFIG_CRYPTO_LZ4K_OPLUS=y" >> "$CONFIG_FILE"
+              echo "CONFIG_ZRAM_WRITEBACK=y" >> "$CONFIG_FILE"
             fi
           fi
             
@@ -413,21 +392,6 @@ jobs:
             #tools/bazel build --config=fast --lto=${{ inputs.lto_type }} //common:kernel_aarch64_dist
           fi
 
-      #- name: Copy file
-      #  run: |
-      #    cp -r $CONFIG source-patched-$CONFIG
-
-      #- name: Upload artifact
-      #  if: ${{ inputs.make_release == false }}
-      #  uses: actions/upload-artifact@v4
-      #  with:
-      #    name: source-patched-${{ env.CONFIG }}
-      #    path: source-patched-${{ env.CONFIG }}
-
-      #- name: Remove file
-      #  run: |
-      #    rm -rf source-patched-$CONFIG
-
       - name: Build with retry
         uses: nick-fields/retry@v3
         with:
@@ -440,7 +404,7 @@ jobs:
             cd "$CONFIG"
             echo "Building the kernel..."
             if [ -f "build/build.sh" ]; then
-              LTO=thin BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
+              LTO=thin SYSTEM_DLKM_RE_SIGN=0 BUILD_SYSTEM_DLKM=0 KMI_SYMBOL_LIST_STRICT_MODE=0 BUILD_CONFIG=common/build.config.gki.aarch64 build/build.sh CC="/usr/bin/ccache clang" || exit 1
             else
               tools/bazel build --disk_cache=/home/runner/.cache/bazel --config=fast --lto=thin //common:kernel_aarch64_dist || exit 1
             fi
